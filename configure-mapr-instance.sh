@@ -262,6 +262,9 @@ install_mapr_packages() {
 	update-env-sh MAPR_HOME $MAPR_HOME
 	update-env-sh JAVA_HOME $JAVA_HOME
 
+	echo Adding CLDB option to $MAPR_ENV_FILE  >> $LOG
+	echo "export CLDB_OPTS=\"-XX:ThreadStackSize=300\"" | tee -a $MAPR_ENV_FILE
+
 	echo MapR software installation complete >> $LOG
 
 	return 0
