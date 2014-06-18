@@ -259,6 +259,12 @@ if [ -n "${pboot}" ] ; then
 	[ "${pboot}" = "true" ] && pboot_args="--persistent_boot_disk"
 fi
 
+# Create common SSH key
+#   TBD it would be better if each host had his own key
+yes | ssh-keygen -N "" -f ".ssh-cluster-key" > /dev/null
+sshpublic_args="--metadata_from_file=sshpublic:.ssh-cluster-key.pub" 
+sshprivate_args="--metadata_from_file=sshprivate:.ssh-cluster-key" 
+
 #	Since the format of each hostline is so simple (<node>:<packages>),
 #	it's safer to simply parse it ourselves.
 
@@ -293,6 +299,8 @@ do
 		--metadata="maprpackages:${packages}" \
 		${license_args:-} \
 		${metrics_args:-} \
+		${sshpublic_args:-} \
+		${sshprivate_args:-} \
 		--metadata="cluster:${cluster}" \
 		--metadata="zknodes:${zkhosts}" \
 		--metadata="cldbnodes:${cldbhosts}" \

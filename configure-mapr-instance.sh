@@ -67,6 +67,9 @@ restore_only=$(curl -H "$md_header" -f $murl_attr/maprrestore)
 restore_only=${restore_only:-false}
 restore_hostid=$(curl -H "$md_header" -f $murl_attr/maprhostid)
 
+sshpublic=$(curl -H "$md_header" -f $murl_attr/sshpublic)
+sshprivate=$(curl -H "$md_header" -f $murl_attr/sshprivate)
+
 # A few other directories for our distribution
 MAPR_HADOOP_DIR=${MAPR_HOME}/hadoop/hadoop-0.20.2
 
@@ -153,16 +156,6 @@ passwdEOF
 
 	fi
 
-		# Create sshkey for $MAPR_USER (must be done AS MAPR_USER)
-	su $MAPR_USER -c "mkdir ~${MAPR_USER}/.ssh ; chmod 700 ~${MAPR_USER}/.ssh"
-	su $MAPR_USER -c "ssh-keygen -q -t rsa -f ~${MAPR_USER}/.ssh/id_rsa -P '' "
-	su $MAPR_USER -c "cp -p ~${MAPR_USER}/.ssh/id_rsa ~${MAPR_USER}/.ssh/id_launch"
-	su $MAPR_USER -c "cp -p ~${MAPR_USER}/.ssh/id_rsa.pub ~${MAPR_USER}/.ssh/authorized_keys"
-	su $MAPR_USER -c "chmod 600 ~${MAPR_USER}/.ssh/authorized_keys"
-		
-		# TBD : copy the key-pair used to launch the instance directly
-		# into the mapr account to simplify connection from the
-		# launch client.
 	MAPR_USER_DIR=`eval "echo ~${MAPR_USER}"`
 
 		# Enhance the login with rational stuff
@@ -833,39 +826,25 @@ function start_mapr_services()
 # here, this is just a helper function
 function retrieve_ssh_keys() 
 {
-	echo "Retrieving ssh keys for other cluster nodes" >> $LOG
+	echo "Setting SSH key for internal SSH inside cluster" >> $LOG
 
 	MAPR_USER_DIR=`eval "echo ~${MAPR_USER}"`
-	clusterKeyDir=/cluster-info/keys
 
-	hadoop fs -stat ${clusterKeyDir}
-	[ $? -ne 0 ] && return 0
-
-	kdir=$clusterKeyDir
-		
-		# Copy root keys FIRST ... since the MapR user keys are 
-		# more important (and we want to give more time)
-	akFile=/root/.ssh/authorized_keys
-	for kf in `hadoop fs -ls ${kdir} | grep ${kdir} | grep _root | awk '{print $NF}' | sed "s_${kdir}/__g"`
-	do
-		echo "  found $kf"
-		if [ ! -f /root/.ssh/$kf ] ; then
-			hadoop fs -get ${kdir}/${kf} /root/.ssh/$kf
-			cat /root/.ssh/$kf >> ${akFile}
-		fi
-	done
-
-	akFile=${MAPR_USER_DIR}/.ssh/authorized_keys
-	for kf in `hadoop fs -ls ${kdir} | grep ${kdir} | grep _${MAPR_USER} | awk '{print $NF}' | sed "s_${kdir}/__g"`
-	do
-		echo "  found $kf"
-		if [ ! -f ${MAPR_USER_DIR}/.ssh/$kf ] ; then
-			hadoop fs -get ${kdir}/${kf} ${MAPR_USER_DIR}/.ssh/$kf
-			cat ${MAPR_USER_DIR}/.ssh/$kf >> ${akFile}
-			chown --reference=${MAPR_USER_DIR} \
-				${MAPR_USER_DIR}/.ssh/$kf ${akFile}
-		fi
-	done
+	# Create sshkey for $MAPR_USER (must be done AS MAPR_USER)
+	su $MAPR_USER -c "mkdir ${MAPR_USER_DIR}/.ssh ; chmod 700 ~${MAPR_USER}/.ssh"
+	su $MAPR_USER -c "echo \"${sshprivate}\" > ${MAPR_USER_DIR}/.ssh/id_rsa"
+	su $MAPR_USER -c "echo \"${sshpublic}\" > ${MAPR_USER_DIR}/.ssh/id_rsa.pub"
+	su $MAPR_USER -c "cp -p ${MAPR_USER_DIR}/.ssh/id_rsa ${MAPR_USER_DIR}/.ssh/id_launch"
+	su $MAPR_USER -c "cp -p ${MAPR_USER_DIR}/.ssh/id_rsa ${MAPR_USER_DIR}/.ssh/id_cluster"
+	su $MAPR_USER -c "cp -p ${MAPR_USER_DIR}/.ssh/id_rsa.pub ${MAPR_USER_DIR}/.ssh/authorized_keys"
+	su $MAPR_USER -c "chmod 600 ${MAPR_USER_DIR}/.ssh/authorized_keys"
+	su $MAPR_USER -c "echo ${MAPR_USER_DIR}/.ssh/authorized_keys"
+	su $MAPR_USER -c "echo \"Host *
+  IdentityFile ${MAPR_USER_DIR}/.ssh/id_cluster
+  UserKnownHostsFile /dev/null
+  CheckHostIP no
+  StrictHostKeyChecking no\" >> ${MAPR_USER_DIR}/.ssh/config"
+    su $MAPR_USER -c "chmod 600 ${MAPR_USER_DIR}/.ssh/config"
 }
 
 # Returns 1 if volume comes on line within 5 minutes
@@ -1013,6 +992,8 @@ function main()
 	add_mapr_user
 
 	configure_host_identity 
+
+	retrieve_ssh_keys
 
 		# Prepare to configure the node, supporting version-specific options
 	major_ver=${MAPR_VERSION%%.*}
