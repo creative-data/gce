@@ -1,0 +1,3 @@
+node0:gcs,spark-master
+node1:gcs,spark-worker
+node2:gcs,spark-worker

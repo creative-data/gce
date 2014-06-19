@@ -45,6 +45,7 @@ MAPR_PASSWD=${MAPR_PASSWD:-"MapR"}
 MAPR_IMAGER_SCRIPT=$(curl -H "$md_header" -f $murl_attr/maprimagerscript)
 MAPR_VERSION=$(curl -H "$md_header" $murl_attr/maprversion)
 MAPR_PACKAGES=$(curl -H "$md_header" -f $murl_attr/maprpackages)
+MAPR_COMPONENTS=$(curl -H "$md_header" -f $murl_attr/maprcomponents)
 MAPR_LICENSE=$(curl -H "$md_header" -f $murl_attr/maprlicense)
 MAPR_NFS_SERVER=$(curl -H "$md_header" -f $murl_attr/maprnfsserver)
 
@@ -62,6 +63,7 @@ MAPR_DISKS_PREREQS="fileserver"
 cluster=$(curl -H "$md_header" -f $murl_attr/cluster)
 zknodes=$(curl -H "$md_header" -f $murl_attr/zknodes)  
 cldbnodes=$(curl -H "$md_header" -f $murl_attr/cldbnodes)  
+sparkworkers=$(curl -H "$md_header" -f $murl_attr/sparkworkers)  
 
 restore_only=$(curl -H "$md_header" -f $murl_attr/maprrestore)  
 restore_only=${restore_only:-false}
@@ -847,6 +849,92 @@ function retrieve_ssh_keys()
     su $MAPR_USER -c "chmod 600 ${MAPR_USER_DIR}/.ssh/config"
 }
 
+function install_components() {
+	echo "Installing Hadoop components" >> $LOG
+
+	if [ -z "${MAPR_COMPONENTS:-}" ] ; then
+		echo "No Hadoop component specified" >> $LOG
+		return 0
+	fi
+
+	for pkg in `echo ${MAPR_COMPONENTS//,/ }`
+	do
+		echo "Installing $pkg..." >> $LOG
+
+		if [ "$pkg" == "spark-master" -o "$pkg" == "spark-worker" ] ; then
+			if which dpkg &> /dev/null ; then
+				scala_installed=`dpkg --get-selections scala* | awk '{print $1}'`
+			else
+				scala_installed=`rpm -q --all --qf "%{NAME}\n" | grep ^scala`
+			fi
+			if [ "$scala_installed" == "" ] ; then
+				c curl -o /tmp/scala.rpm http://www.scala-lang.org/files/archive/scala-2.10.3.rpm
+				c rpm -i /tmp/scala.rpm
+			fi
+		fi
+
+		if [ "$pkg" == "spark-master" ] ; then
+			c $INSTALL_CMD mapr-spark-master
+			mkdir $MAPR_HOME/spark/spark-0.9.1/tmp
+			chmod 777 $MAPR_HOME/spark/spark-0.9.1/tmp
+			$MAPR_HOME/server/configure.sh -R
+			echo localhost > $MAPR_HOME/spark/spark-0.9.1/conf/slaves
+			for host in `echo ${sparkworkers//,/ }`
+			do
+				echo ${host} >> $MAPR_HOME/spark/spark-0.9.1/conf/slaves
+			done
+
+			echo "Waiting for spark to be installed on workers" >> $LOG
+			spark_workers_installed="false"
+			i=0
+			while [ $i -lt 300 ] 
+			do
+				# test workers
+				spark_workers_installed="true"
+				for host in `echo ${sparkworkers//,/ }`
+				do
+					if which dpkg &> /dev/null ; then
+						spark_worker_installed=`su $MAPR_USER -c "ssh ${host} 'dpkg --get-selections mapr-spark* | awk \'{print $1}\''"`
+					else
+						spark_worker_installed=`su $MAPR_USER -c "ssh ${host} 'rpm -q --all --qf \"%{NAME}\n\" | grep ^mapr-spark'"`
+					fi
+					if [ "$spark_worker_installed" == "" ] ; then
+						spark_workers_installed="false"
+						break
+					fi
+				done
+
+				# if ok, quit
+				if [ "$spark_workers_installed" == "true" ] ; then
+					echo "... workers ready" >> $LOG
+					break
+				fi
+				
+				# repeat
+				sleep 3
+				i=$[i+3]
+			done
+
+			if [ "$spark_workers_installed" == "true" ] ; then
+				echo "spark-master installed and workers up and running" >> $LOG
+				su $MAPR_USER -c "$MAPR_HOME/spark/spark-0.9.1/sbin/start-slaves.sh"
+			else
+				echo "spark-master installed but spark not found on at least 1 worker after 5 min..." >> $LOG
+				echo "Please start workers manually on ${THIS_HOST} by running:" >> $LOG
+				echo "   ${MAPR_HOME}/spark/spark-0.9.1/sbin/start-slaves.sh" >> $LOG
+			fi
+		elif [ "$pkg" == "spark-worker" ] ; then
+			c $INSTALL_CMD mapr-spark
+			mkdir $MAPR_HOME/spark/spark-0.9.1/tmp
+			chmod 777 $MAPR_HOME/spark/spark-0.9.1/tmp
+		fi
+	done
+	
+	echo "Hadoop components installation complete" >> $LOG
+
+	return 0
+}
+
 # Returns 1 if volume comes on line within 5 minutes
 # Need this functionality to ensure proper addition of our new volumes.
 #
@@ -1070,7 +1158,10 @@ function main()
 		configure_mapr_nfs
 
 		create_metrics_db
+
+		install_components
 	fi
+
 
 	echo "Instance initialization completed at "`date` >> $LOG
 	echo INSTANCE READY >> $LOG

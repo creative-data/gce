@@ -12,6 +12,15 @@
 #       node1:zookeeper,cldb,fileserver,tasktracker,nfs
 #       node2:zookeeper,jobtracker,fileserver,tasktracker,nfs
 #
+#   Components to be installed are listed in the components file, following
+#   the same patern as config file. Possible components are:
+#      spark-master, spark-worker
+#
+#   A sample components file is
+#       node0:spark-master
+#       node1:spark-worker
+#       node2:spark-worker
+#
 #	By default, the nodes will be given hostnames equivalent to the
 #	name specification (eg "node0", "node1", "node2" in the above example).
 #	The base hostname can be overridden with the "--node-name" option.
@@ -43,6 +52,7 @@ usage() {
        --cluster <clustername>
        --mapr-version <version, eg 3.0.1, 3.1.0, 4.0.0>
        --config-file <cfg-file>
+       --components-file <components-file>
        --image image_name
        --machine-type <machine-type>
        --persistent-disks <nxm>         # N disks of M gigabytes 
@@ -118,6 +128,7 @@ do
   --cluster)      cluster=$2  ;;
   --mapr-version) maprversion=$2  ;;
   --config-file)  configFile=$2  ;;
+  --components-file)  componentsFile=$2  ;;
   --node-name)    nodeName=$2  ;;
   --project)      project=$2  ;;
   --zone)         zone=$2  ;;
@@ -216,6 +227,17 @@ if [ -n "$metricsnode" ] ; then
 	[ -n "${nodeName:-}" ] && metricsnode=${nodeName}$metricsidx
 fi
 
+sparkworkers=`grep ^$NODE_NAME_ROOT $componentsFile | grep spark-worker | cut -f1 -d:`
+sparkwhosts=""
+for sparkh in `echo $sparkworkers` ; do
+	sparkhidx=${sparkh#${NODE_NAME_ROOT}}
+	
+	[ -n "${nodeName:-}" ] && sparkh=${nodeName}$sparkhidx
+	if [ -n "${sparkwhosts:-}" ] ; then sparkwhosts=$sparkwhosts','$sparkh
+	else sparkwhosts=$sparkh
+	fi
+done
+
 # TBD 
 #	Make sure there are an odd number of zookeepers and at least one CLDB
 
@@ -265,6 +287,9 @@ yes | ssh-keygen -N "" -f ".ssh-cluster-key" > /dev/null
 sshpublic_args="--metadata_from_file=sshpublic:.ssh-cluster-key.pub" 
 sshprivate_args="--metadata_from_file=sshprivate:.ssh-cluster-key" 
 
+# Minify the configure lanch script
+./bash_minify.pl -i configure-mapr-instance.sh -o configure-mapr-instance-min.sh -C -F
+
 #	Since the format of each hostline is so simple (<node>:<packages>),
 #	it's safer to simply parse it ourselves.
 
@@ -273,6 +298,8 @@ while read hostline
 do
 	host="${hostline%:*}"
 	packages="${hostline#*:}"
+	componentsLine=`grep ^${host} ${componentsFile}`
+	components="${componentsLine#*:}"
 
 	idx=${host#${NODE_NAME_ROOT}}
 	[ -n "${nodeName:-}" ] && host=${nodeName}$idx
@@ -293,10 +320,12 @@ do
 		--zone=$zone \
 		${pboot_args:-} \
 		${pdisk_args:-} \
-		--metadata_from_file="startup-script:configure-mapr-instance.sh" \
+		--metadata_from_file="startup-script:configure-mapr-instance-min.sh" \
 		--metadata_from_file="maprimagerscript:prepare-mapr-image.sh" \
 		--metadata="maprversion:${maprversion}"  \
 		--metadata="maprpackages:${packages}" \
+		--metadata="maprcomponents:${components}" \
+		--metadata="sparkworkers:${sparkwhosts:-}" \
 		${license_args:-} \
 		${metrics_args:-} \
 		${sshpublic_args:-} \
